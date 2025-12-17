@@ -12,7 +12,7 @@ import gym_super_mario_bros
 from gym_super_mario_bros.actions import SIMPLE_MOVEMENT, COMPLEX_MOVEMENT
 from nes_py.wrappers import JoypadSpace
 from wrapper import MaxAndSkipWrapper, WarpFrameWrapper, ScaledFloatFrameWrapper, FrameStackWrapper, \
-    FinalEvalRewardEnv, RecordCAM
+    FinalEvalRewardEnv, RecordCAM, CoinRewardWrapper
 
 action_dict = {2: [["right"], ["right", "A"]], 7: SIMPLE_MOVEMENT, 12: COMPLEX_MOVEMENT}
 action_nums = [2, 7, 12]
@@ -27,6 +27,7 @@ def wrapped_mario_env(model, cam_video_path, version=0, action=2, obs=1):
                 lambda env: WarpFrameWrapper(env, size=84),
                 lambda env: ScaledFloatFrameWrapper(env),
                 lambda env: FrameStackWrapper(env, n_frames=obs),
+                lambda env: CoinRewardWrapper(env),
                 lambda env: FinalEvalRewardEnv(env),
                 lambda env: RecordCAM(env, cam_model=model, video_folder=cam_video_path)
             ]
@@ -89,6 +90,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     mario_dqn_config.policy.model.obs_shape=[args.obs, 84, 84]
     mario_dqn_config.policy.model.action_shape=args.action
+    mario_dqn_config.policy.model.dueling = True
     ckpt_path = args.checkpoint
     video_dir_path = args.replay_path
     state_dict = torch.load(ckpt_path, map_location='cpu')
