@@ -87,6 +87,45 @@ class CoinRewardWrapper(gym.Wrapper):
         self.num_coins = info['coins']
         return obs, reward, done, info
 
+# 卡住重置wrapper
+class ResetOnStuckWrapper(gym.Wrapper):
+    """
+    Overview:
+        Reset the environment if the agent is stuck in the same position for a long time.
+    Interface:
+        ``__init__``, ``step``, ``reset``
+    """
+    def __init__(self, env, max_stuck_steps=100):
+        super(ResetOnStuckWrapper, self).__init__(env)
+        self.max_stuck_steps = max_stuck_steps
+        self.stuck_counter = 0
+        self.last_x_pos = 0
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        
+        # 获取当前横坐标
+        x_pos = info.get('x_pos', 0)
+        
+        # 检查是否卡住 (坐标变化很小)
+        if abs(x_pos - self.last_x_pos) < 2:
+            self.stuck_counter += 1
+        else:
+            self.stuck_counter = 0
+            self.last_x_pos = x_pos
+            
+        # 如果卡住超过阈值，强制 Done 并给予惩罚
+        if self.stuck_counter > self.max_stuck_steps:
+            done = True
+            reward -= 10 # 给予卡死惩罚
+            info['stuck'] = True # 记录日志用
+            
+        return obs, reward, done, info
+
+    def reset(self):
+        self.stuck_counter = 0
+        self.last_x_pos = 0
+        return self.env.reset()
 
 # CAM相关，不需要了解
 def dump_arr2video(arr, video_folder):
@@ -114,7 +153,8 @@ def get_cam(img, model):
     input_tensor = torch.from_numpy(img).unsqueeze(0)
 
     # Construct the CAM object once, and then re-use it on many images:
-    cam = GradCAM(model=model, target_layers=target_layers, use_cuda=True)
+    model = model.cuda()   # optional
+    cam = GradCAM(model=model, target_layers=target_layers)
     targets = None
 
     # You can also pass aug_smooth=True and eigen_smooth=True, to apply smoothing.

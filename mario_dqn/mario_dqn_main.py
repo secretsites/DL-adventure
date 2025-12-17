@@ -6,7 +6,7 @@ from ding.config import compile_config
 from ding.worker import BaseLearner, SampleSerialCollector, InteractionSerialEvaluator, AdvancedReplayBuffer
 from ding.envs import SyncSubprocessEnvManager, DingEnvWrapper, BaseEnvManager
 from wrapper import MaxAndSkipWrapper, WarpFrameWrapper, ScaledFloatFrameWrapper, FrameStackWrapper, \
-    FinalEvalRewardEnv
+    FinalEvalRewardEnv, CoinRewardWrapper, StickyActionWrapper, SparseRewardWrapper, ResetOnStuckWrapper
 from policy import DQNPolicy
 from model import DQN
 from ding.utils import set_pkg_seed
@@ -17,6 +17,7 @@ from nes_py.wrappers import JoypadSpace
 from functools import partial
 import os
 import gym_super_mario_bros
+import swanlab
 
 
 # 动作相关配置
@@ -34,15 +35,21 @@ def wrapped_mario_env(version=0, action=7, obs=1):
             'env_wrapper': [
                 # 默认wrapper：跳帧以降低计算量
                 lambda env: MaxAndSkipWrapper(env, skip=4),
+                # 添加卡住重置wrapper
+                lambda env: ResetOnStuckWrapper(env),
                 # 默认wrapper：将mario游戏环境图片进行处理，返回大小为84X84的图片observation
                 lambda env: WarpFrameWrapper(env, size=84),
                 # 默认wrapper：将observation数值进行归一化
                 lambda env: ScaledFloatFrameWrapper(env),
                 # 默认wrapper：叠帧，将连续n_frames帧叠到一起，返回shape为(n_frames,84,84)的图片observation
                 lambda env: FrameStackWrapper(env, n_frames=obs),
-                # 默认wrapper：在评估一局游戏结束时返回累计的奖励，方便统计
-                lambda env: FinalEvalRewardEnv(env),
                 # 以下是你添加的wrapper
+                # 添加粘性动作wrapper
+                lambda env: StickyActionWrapper(env, p_sticky=0.25),
+                # 添加金币奖励wrapper
+                lambda env: CoinRewardWrapper(env),
+                # 默认wrapper：在评估一局游戏结束时返回累计的奖励，方便统计
+                lambda env: FinalEvalRewardEnv(env)
             ]
         }
     )
@@ -84,6 +91,12 @@ def main(cfg, args, seed=0, max_env_step=int(3e6)):
     policy = DQNPolicy(cfg.policy, model=model)
 
     # 设置学习、经验收集、评估、经验回放等强化学习常用配置
+    swanlab.init(
+        experiment_name=cfg.exp_name,
+        project="Mario-DQN-Experiment",
+        config=cfg,
+    )
+    swanlab.sync_tensorboardX()
     tb_logger = SummaryWriter(os.path.join('./{}/log/'.format(cfg.exp_name), 'serial'))
     learner = BaseLearner(cfg.policy.learn.learner, policy.learn_mode, tb_logger, exp_name=cfg.exp_name)
     collector = SampleSerialCollector(
@@ -133,8 +146,11 @@ if __name__ == "__main__":
     parser.add_argument("--action", "-a", type=int, default=7, choices=[2,7,12])
     # 观测空间叠帧数目，不叠帧或叠四帧
     parser.add_argument("--obs", "-o", type=int, default=1, choices=[1,4])
+    # 最大训练步数
+    parser.add_argument("--steps", type=int, default=5000000)
     args = parser.parse_args()
     mario_dqn_config.exp_name = 'exp/v'+str(args.version)+'_'+str(args.action)+'a_'+str(args.obs)+'f_seed'+str(args.seed)
     mario_dqn_config.policy.model.obs_shape=[args.obs, 84, 84]
     mario_dqn_config.policy.model.action_shape=args.action
-    main(deepcopy(mario_dqn_config), args, seed=args.seed)
+    mario_dqn_config.policy.model.dueling = True
+    main(deepcopy(mario_dqn_config), args, seed=args.seed, max_env_step=args.steps)
