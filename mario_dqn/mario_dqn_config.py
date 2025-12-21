@@ -31,7 +31,9 @@ mario_dqn_config = dict(
             # 网络结构超参数
             encoder_hidden_size_list=[32, 64, 128],
             # 是否使用对决网络 Dueling Network
-            dueling=False,
+            dueling=True,
+            # 对决头部的聚合方式：mean / max / lse
+            dueling_aggregator="mean",
         ),
         # n-step TD
         nstep=3,
@@ -49,7 +51,7 @@ mario_dqn_config = dict(
             target_update_freq=500,
         ),
         # 收集经验相关，每次收集96个transition进行一次训练
-        collect=dict(n_sample=96, ),
+        collect=dict(n_sample=128, ),
         # 评估相关，每2000个iteration评估一次
         eval=dict(evaluator=dict(eval_freq=2000, )),
         other=dict(

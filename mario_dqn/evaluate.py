@@ -2,6 +2,7 @@
 智能体评估函数
 """
 import torch
+import datetime
 from ding.utils import set_pkg_seed
 from mario_dqn_config import mario_dqn_config, mario_dqn_create_config
 from model import DQN
@@ -12,26 +13,48 @@ import gym_super_mario_bros
 from gym_super_mario_bros.actions import SIMPLE_MOVEMENT, COMPLEX_MOVEMENT
 from nes_py.wrappers import JoypadSpace
 from wrapper import MaxAndSkipWrapper, WarpFrameWrapper, ScaledFloatFrameWrapper, FrameStackWrapper, \
-    FinalEvalRewardEnv, RecordCAM, CoinRewardWrapper
+    FinalEvalRewardEnv, RecordCAM, StickyActionWrapper , SparseRewardWrapper , CoinRewardWrapper, ContinuousDriveRewardWrapper
+
 
 action_dict = {2: [["right"], ["right", "A"]], 7: SIMPLE_MOVEMENT, 12: COMPLEX_MOVEMENT}
 action_nums = [2, 7, 12]
 
 
-def wrapped_mario_env(model, cam_video_path, version=0, action=2, obs=1):
+def wrapped_mario_env(model, cam_video_path, version=0, action=2, obs=1, reward_mode="dense"):
+    wrappers = [
+        lambda env: MaxAndSkipWrapper(env, skip=4),
+        lambda env: WarpFrameWrapper(env, size=84),
+        lambda env: ScaledFloatFrameWrapper(env),
+        lambda env: FrameStackWrapper(env, n_frames=obs),
+    ]
+
+    if reward_mode == "dense":
+        wrappers.append(
+            lambda env: ContinuousDriveRewardWrapper(
+                env,
+                progress_coef=0.05,
+                coin_coef=1.0,
+                time_penalty=0.01,
+                alive_bonus=0.001,
+                death_penalty=5.0,
+                stagnation_step_limit=10,
+                stagnation_penalty=0.75,
+                stagnation_x_threshold=1.0,
+            )
+        )
+    elif reward_mode == "sparse":
+        wrappers.append(lambda env: SparseRewardWrapper(env))
+    else:
+        raise ValueError(f"Unsupported reward_mode: {reward_mode}")
+    
+    wrappers.extend([
+        lambda env: FinalEvalRewardEnv(env),
+        lambda env: RecordCAM(env, cam_model=model, video_folder=cam_video_path)
+    ])
+
     return DingEnvWrapper(
         JoypadSpace(gym_super_mario_bros.make("SuperMarioBros-1-1-v"+str(version)), action_dict[int(action)]),
-        cfg={
-            'env_wrapper': [
-                lambda env: MaxAndSkipWrapper(env, skip=4),
-                lambda env: WarpFrameWrapper(env, size=84),
-                lambda env: ScaledFloatFrameWrapper(env),
-                lambda env: FrameStackWrapper(env, n_frames=obs),
-                lambda env: CoinRewardWrapper(env),
-                lambda env: FinalEvalRewardEnv(env),
-                lambda env: RecordCAM(env, cam_model=model, video_folder=cam_video_path)
-            ]
-        }
+        cfg={'env_wrapper': wrappers}
     )
 
 
@@ -43,7 +66,7 @@ def evaluate(args, state_dict, seed, video_dir_path, eval_times):
     # 加载模型权重文件
     model.load_state_dict(state_dict['model'])
     # 生成环境
-    env = wrapped_mario_env(model, args.replay_path, args.version, args.action, args.obs)
+    env = wrapped_mario_env(model, args.replay_path, args.version, args.action, args.obs, args.reward_mode)
     # 实例化DQN策略
     policy = DQNPolicy(cfg.policy, model=model).eval_mode
     # 设置seed
@@ -87,10 +110,12 @@ if __name__ == "__main__":
     parser.add_argument("--version", "-v", type=int, default=0, choices=[0,1,2,3])
     parser.add_argument("--action", "-a", type=int, default=7, choices=[2,7,12])
     parser.add_argument("--obs", "-o", type=int, default=1, choices=[1,4])
+    parser.add_argument("--reward_mode", type=str, default="dense", choices=["dense", "sparse"], help="dense 使用连续 shaping，sparse 仅通关/死亡奖励")
+    parser.add_argument("--dueling_aggregator", type=str, default="mean", choices=["mean", "max", "lse"], help="评估时与训练保持一致的对决聚合方式")
     args = parser.parse_args()
     mario_dqn_config.policy.model.obs_shape=[args.obs, 84, 84]
     mario_dqn_config.policy.model.action_shape=args.action
-    mario_dqn_config.policy.model.dueling = True
+    mario_dqn_config.policy.model.dueling_aggregator=args.dueling_aggregator
     ckpt_path = args.checkpoint
     video_dir_path = args.replay_path
     state_dict = torch.load(ckpt_path, map_location='cpu')
